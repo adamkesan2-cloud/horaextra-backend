@@ -1,44 +1,12 @@
-const winston = require('winston');
-
-const levels = {
-  error: 0,
-  warn: 1,
-  info: 2,
-  http: 3,
-  debug: 4
-};
-
-const colors = {
-  error: 'red',
-  warn: 'yellow',
-  info: 'green',
-  http: 'magenta',
-  debug: 'white'
-};
-
-winston.addColors(colors);
-
-const format = winston.format.combine(
-  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
-  winston.format.colorize({ all: true }),
-  winston.format.printf(
-    (info) => `${info.timestamp} ${info.level}: ${info.message}`
-  )
-);
-
-const transports = [
-  new winston.transports.Console() // Só console
-];
-
-const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'development' ? 'debug' : 'info',
-  levels,
-  format,
-  transports
-});
-
-logger.stream = {
-  write: (message) => logger.http(message.trim())
+// logger.js simplificado - sem winston
+const logger = {
+  info: (...args) => console.log('[INFO]', ...args),
+  error: (...args) => console.error('[ERROR]', ...args),
+  warn: (...args) => console.warn('[WARN]', ...args),
+  debug: (...args) => console.debug('[DEBUG]', ...args),
+  stream: {
+    write: (message) => console.log(message.trim())
+  }
 };
 
 module.exports = logger;
