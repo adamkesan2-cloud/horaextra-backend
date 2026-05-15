@@ -1,11 +1,10 @@
-{
+﻿{
   "name": "horaextra-backend",
   "version": "1.0.0",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "vercel-build": "npm install"
+    "dev": "nodemon src/server.js"
   },
   "engines": {
     "node": "20.x"
