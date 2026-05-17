@@ -10,7 +10,7 @@ const fs = require('fs');
 const app = express();
 
 // Detectar ambiente Vercel
-const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+const isVercel = process.env.VERCEL === '1';
 
 // Uploads - usar /tmp no Vercel
 const uploadsDir = isVercel ? '/tmp/uploads' : path.join(__dirname, '../uploads');
