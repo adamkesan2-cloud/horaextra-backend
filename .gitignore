@@ -8,3 +8,9 @@ logs/
 uploads/
 .vercel
 .env*.local
+
+*.zip
+node_modules/
+uploads/
+logs/
+*.sqlite

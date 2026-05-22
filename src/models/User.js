@@ -36,9 +36,9 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 'client',
       },
       photo_url: {
-        type: DataTypes.STRING(500),
-        allowNull: true,
-      },
+  type: DataTypes.TEXT,
+  allowNull: true,
+},
       // Dados de endereço
       address: {
         type: DataTypes.TEXT,

@@ -217,3 +217,45 @@ exports.toggleAvailability = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+exports.uploadAvatar = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhuma imagem enviada' });
+    }
+
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ error: 'Utilizador não encontrado' });
+
+    // Guardar como base64 (funciona sem storage externo)
+    const base64 = req.file.buffer.toString('base64');
+    const mimeType = req.file.mimetype;
+    const photoUrl = `data:${mimeType};base64,${base64}`;
+
+    await user.update({ photo_url: photoUrl });
+
+    console.log('✅ Avatar atualizado para utilizador:', req.user.id);
+    return res.json({
+      success: true,
+      photo_url: photoUrl,
+      message: 'Avatar atualizado com sucesso',
+    });
+  } catch (error) {
+    console.error('❌ Erro ao fazer upload de avatar:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.removeAvatar = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ error: 'Utilizador não encontrado' });
+
+    await user.update({ photo_url: null });
+
+    console.log('✅ Avatar removido para utilizador:', req.user.id);
+    return res.json({ success: true, message: 'Avatar removido com sucesso' });
+  } catch (error) {
+    console.error('❌ Erro ao remover avatar:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
