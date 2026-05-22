@@ -30,22 +30,25 @@ const allowedOrigins = [
   'http://127.0.0.1:3000',
   'http://127.0.0.1:4000'
 ];
-
 const corsOptions = {
-  origin: (origin, cb) => {
-    if (!origin || allowedOrigins.includes(origin) || origin.includes('localhost') || origin.includes('127.0.0.1')) {
-      cb(null, true);
-    } else {
-      console.log('CORS bloqueado:', origin);
-      cb(null, true);
-    }
+  origin: function(origin, callback) {
+    // Aceita sem origin (mobile, Postman)
+    if (!origin) return callback(null, true);
+    // Aceita localhost
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) return callback(null, true);
+    // Aceita qualquer domínio Vercel
+    if (origin.includes('vercel.app')) return callback(null, true);
+    // Aceita Railway
+    if (origin.includes('railway.app')) return callback(null, true);
+    // Log e aceita mesmo assim (para não bloquear)
+    console.log('⚠️ CORS origem desconhecida mas aceite:', origin);
+    return callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
   credentials: true,
   optionsSuccessStatus: 204,
 };
-
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(morgan('dev'));
 app.use(cors(corsOptions));

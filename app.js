@@ -41,13 +41,17 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function(origin, callback) {
+    // Aceita sem origin (mobile, Postman)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin) || origin.includes('localhost') || origin.includes('127.0.0.1')) {
-      callback(null, true);
-    } else {
-      console.log('⚠️ CORS bloqueado para:', origin);
-      callback(null, true);
-    }
+    // Aceita localhost
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) return callback(null, true);
+    // Aceita qualquer domínio Vercel
+    if (origin.includes('vercel.app')) return callback(null, true);
+    // Aceita Railway
+    if (origin.includes('railway.app')) return callback(null, true);
+    // Log e aceita mesmo assim (para não bloquear)
+    console.log('⚠️ CORS origem desconhecida mas aceite:', origin);
+    return callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
