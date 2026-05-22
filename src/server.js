@@ -23,6 +23,8 @@ app.use('/uploads', express.static(uploadsDir));
 const allowedOrigins = [
   'https://horaextra-amber.vercel.app',
   'https://horaextra.vercel.app',
+  'https://horaextra-app.vercel.app',
+  'https://horaextra-app-git-main-adam-kesans-projects.vercel.app',
   'http://localhost:3000',
   'http://localhost:4000',
   'http://127.0.0.1:3000',
