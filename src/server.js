@@ -63,15 +63,41 @@ wss.on('connection', (ws, req) => {
       const msg  = JSON.parse(raw);
       const user = wsStore.connectedUsers.get(userId);
 
+      // Flutter envia register logo após conectar
+      if (msg.type === 'register') {
+        // Atualizar dados do utilizador se enviados
+        if (user) {
+          if (msg.lat)      user.lat      = msg.lat;
+          if (msg.lng)      user.lng      = msg.lng;
+          if (msg.isOnline !== undefined) user.isOnline = msg.isOnline;
+        }
+        ws.send(JSON.stringify({ type: 'registered', userId }));
+        console.log(`✅ WS: registo confirmado para ${userName}`);
+      }
+
+      // Flutter envia ping periódico
+      if (msg.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' }));
+      }
+
+      // Heartbeat alternativo
+      if (msg.type === 'heartbeat') {
+        if (user) user.lastHeartbeat = new Date();
+        ws.send(JSON.stringify({ type: 'heartbeat_ack' }));
+      }
+
+      // Atualização de localização
       if (msg.type === 'location_update' && user) {
         user.lat = msg.lat;
         user.lng = msg.lng;
       }
 
-      if (msg.type === 'heartbeat') {
-        if (user) user.lastHeartbeat = new Date();
-        ws.send(JSON.stringify({ type: 'heartbeat_ack' }));
+      // Estado online/offline
+      if (msg.type === 'set_online_status' && user) {
+        user.isOnline = msg.isOnline;
+        console.log(`📡 ${userName} → isOnline: ${msg.isOnline}`);
       }
+
     } catch (e) {
       console.error('WS msg inválida:', e.message);
     }
