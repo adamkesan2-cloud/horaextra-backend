@@ -15,7 +15,21 @@ const PORT   = process.env.PORT || 4000;
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: '/ws' });
 
+// Ping a cada 20s para evitar timeout do Railway
+const pingInterval = setInterval(() => {
+  wss.clients.forEach((client) => {
+    if (!client.isAlive) return client.terminate();
+    client.isAlive = false;
+    client.ping();
+  });
+}, 20000);
+
+wss.on('close', () => clearInterval(pingInterval));
+
 wss.on('connection', (ws, req) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   const url   = new URL(req.url, 'http://localhost');
   const token = url.searchParams.get('token');
 
@@ -36,21 +50,24 @@ wss.on('connection', (ws, req) => {
   });
   console.log(`🔌 WS conectado: ${userName} (${userRole})`);
 
-  // Entregar notificações que ficaram pendentes
+  // Entregar notificações pendentes
   const pending = wsStore.getPendingNotifications(userId);
   if (pending.length > 0) {
     pending.forEach(({ type, payload }) => wsStore.sendToUser(userId, type, payload));
     wsStore.clearPendingNotifications(userId);
+    console.log(`📬 ${pending.length} notificações entregues a ${userName}`);
   }
 
   ws.on('message', (raw) => {
     try {
       const msg  = JSON.parse(raw);
       const user = wsStore.connectedUsers.get(userId);
+
       if (msg.type === 'location_update' && user) {
         user.lat = msg.lat;
         user.lng = msg.lng;
       }
+
       if (msg.type === 'heartbeat') {
         if (user) user.lastHeartbeat = new Date();
         ws.send(JSON.stringify({ type: 'heartbeat_ack' }));
