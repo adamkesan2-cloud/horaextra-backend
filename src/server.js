@@ -1,4 +1,4 @@
-// backend/src/server.js
+// backend/src/server.js - VERSÃO CORRIGIDA COM CORS AGRESSIVO
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 }
@@ -21,65 +21,55 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
 // ============================================
-// CORS CONFIGURADO CORRETAMENTE
+// CORS - CONFIGURAÇÃO MAIS AGRESSIVA
 // ============================================
-const allowedOrigins = [
-  'https://horaextra-app.vercel.app',
-  'https://horaextra-app-git-main.vercel.app',
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:8080',
-  /\.vercel\.app$/,
-];
-
-const corsOptions = {
-  origin: function(origin, callback) {
-    // Permitir requisições sem origin (como mobile apps)
-    if (!origin) return callback(null, true);
-    
-    // Verificar se a origem é permitida
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (allowed instanceof RegExp) {
-        return allowed.test(origin);
-      }
-      return allowed === origin;
-    });
-    
-    if (isAllowed || isProduction === false) {
-      callback(null, true);
-    } else {
-      console.log(`❌ CORS bloqueado: ${origin}`);
-      callback(new Error('CORS blocked'), false);
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
-  exposedHeaders: ['Content-Length', 'X-Total-Count'],
-  maxAge: 86400,
-};
-
-// Aplicar CORS
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-
-// Fallback CORS para garantir
+// Middleware CORS manual ANTES de qualquer outra coisa
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  
+  // Permitir todas as origens em produção também
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  
+  // Responder imediatamente para OPTIONS (preflight)
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
   next();
 });
 
+// CORS package como fallback
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+}));
+
+// Helmet com configuração relaxada para CORS
 app.use(helmet({ 
   crossOriginResourcePolicy: { policy: 'cross-origin' },
-  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  contentSecurityPolicy: false,
 }));
+
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Rota de teste CORS
+app.get('/api/test-cors', (req, res) => {
+  res.json({ message: 'CORS funcionando!', timestamp: new Date() });
+});
 
 // Rotas de diagnóstico
 app.get('/', (req, res) => res.json({ success: true, message: 'API HoraExtra funcionando!' }));
@@ -235,8 +225,7 @@ app.use((err, req, res, next) => {
 const { sequelize } = require('./config/database');
 
 if (isVercel) {
-  // Para Vercel, apenas exportar (WebSocket não suportado)
-  console.log('📦 Modo Vercel - WebSocket não disponível');
+  console.log('📦 Modo Vercel - CORS configurado');
   sequelize.authenticate()
     .then(() => console.log('✅ DB conectado (Vercel)'))
     .catch(err => console.error('❌ Erro DB:', err.message));
@@ -283,7 +272,6 @@ if (isVercel) {
     return list;
   }
   
-  // Função para enviar notificações pendentes
   function flushPendingNotifications(userId) {
     const pending = pendingNotifications?.get(userId);
     if (pending && pending.length > 0) {
@@ -324,7 +312,6 @@ if (isVercel) {
           console.log(`🔌 ${msg.name} (${msg.role}) conectado [${userId}]`);
           wsSend(ws, 'registered', { userId });
           
-          // Enviar notificações pendentes
           flushPendingNotifications(userId);
           
           if (msg.role === 'provider') {
@@ -344,21 +331,19 @@ if (isVercel) {
               });
               if (pendingRequests.length > 0) {
                 wsSend(ws, 'pending_requests', { requests: pendingRequests });
-                console.log(`📦 Enviados ${pendingRequests.length} pedidos pendentes para ${msg.name}`);
+                console.log(`📦 Enviados ${pendingRequests.length} pedidos pendentes`);
               }
             } catch (err) { console.error('Erro ao buscar pedidos pendentes:', err); }
           }
           
           if (msg.role === 'client') {
             wsSend(ws, 'providers_snapshot', { providers: getOnlineProviders() });
-            console.log(`📸 Snapshot enviado para cliente ${msg.name}`);
           }
           
           if (msg.role === 'provider' && msg.isOnline !== false) {
-            const notified = wsBroadcast('provider_online',
+            wsBroadcast('provider_online',
               { provider: { id: userId, name: msg.name, lat: msg.lat, lng: msg.lng } },
               (id) => connectedUsers.get(id)?.role === 'client');
-            console.log(`🟢 Prestador ${msg.name} online - notificados ${notified} clientes`);
           }
           break;
           
@@ -369,10 +354,9 @@ if (isVercel) {
           u.lat = msg.lat;
           u.lng = msg.lng;
           u.lastHeartbeat = new Date();
-          const notifiedLoc = wsBroadcast('provider_location',
+          wsBroadcast('provider_location',
             { providerId: userId, lat: msg.lat, lng: msg.lng, providerName: u.name },
             (id) => connectedUsers.get(id)?.role === 'client');
-          console.log(`📍 ${u.name} atualizou localização - notificados ${notifiedLoc} clientes`);
           break;
           
         case 'set_online_status':
@@ -381,29 +365,19 @@ if (isVercel) {
           if (!user || user.role !== 'provider') break;
           user.isOnline = msg.isOnline;
           user.lastHeartbeat = new Date();
-          console.log(`🔵 ${user.name} ficou ${msg.isOnline ? 'ONLINE ✅' : 'OFFLINE ❌'}`);
-          const notifiedStatus = wsBroadcast(msg.isOnline ? 'provider_online' : 'provider_offline',
+          wsBroadcast(msg.isOnline ? 'provider_online' : 'provider_offline',
             { provider: { id: userId, name: user.name, lat: user.lat, lng: user.lng } },
             (id) => connectedUsers.get(id)?.role === 'client');
-          console.log(`📢 ${notifiedStatus} clientes notificados sobre ${msg.isOnline ? 'online' : 'offline'}`);
           break;
           
         case 'service_request': {
           if (!userId) break;
           const { requestId, selectedProviderIds = [], serviceName, clientName, location, budget, observations, isUrgent } = msg;
-          console.log(`📢 NOVO PEDIDO ${requestId} do cliente ${clientName}`);
-          const notified = wsStore.notifyNewRequest({
-            requestId, 
-            clientId: userId, 
-            clientName, 
-            serviceName, 
-            location, 
-            selectedProviderIds,
-            budget,
-            observations,
-            isUrgent
+          console.log(`📢 NOVO PEDIDO ${requestId}`);
+          wsStore.notifyNewRequest({
+            requestId, clientId: userId, clientName, serviceName, location, 
+            selectedProviderIds, budget, observations, isUrgent
           });
-          console.log(`📊 ${notified}/${selectedProviderIds.length} prestadores notificados via WS`);
           break;
         }
         
@@ -413,14 +387,9 @@ if (isVercel) {
           const providerName = connectedUsers.get(userId)?.name ?? 'Prestador';
           const providerLat = connectedUsers.get(userId)?.lat;
           const providerLng = connectedUsers.get(userId)?.lng;
-          console.log(`📞 Resposta do prestador ${providerName}: ${accepted ? 'ACEITOU ✅' : 'RECUSOU ❌'} pedido ${requestId}`);
           wsStore.notifyRequestResponse({ 
-            requestId, 
-            providerId: userId, 
-            providerName, 
-            accepted,
-            providerLat,
-            providerLng,
+            requestId, providerId: userId, providerName, accepted,
+            providerLat, providerLng,
             message: accepted ? `${providerName} aceitou seu pedido!` : `${providerName} recusou o pedido.`
           });
           break;
@@ -430,25 +399,16 @@ if (isVercel) {
           if (!userId) break;
           const { requestId, rating, review } = msg;
           const clientName = connectedUsers.get(userId)?.name ?? 'Cliente';
-          console.log(`✅ Cliente ${clientName} concluiu serviço ${requestId}`);
-          
           try {
             const { ServiceRequest } = require('./models');
             const request = await ServiceRequest.findByPk(requestId);
             if (request && request.provider_id) {
               wsStore.notifyServiceCompleted({
-                requestId,
-                clientId: userId,
-                clientName,
-                providerId: request.provider_id,
-                providerName: null,
-                rating,
-                review
+                requestId, clientId: userId, clientName,
+                providerId: request.provider_id, rating, review
               });
             }
-          } catch (err) {
-            console.error('Erro ao processar conclusão:', err);
-          }
+          } catch (err) { console.error('Erro:', err); }
           break;
         }
         
@@ -456,14 +416,7 @@ if (isVercel) {
           if (!userId) break;
           const { toId, message, requestId } = msg;
           const fromName = connectedUsers.get(userId)?.name ?? 'Usuário';
-          console.log(`💬 Mensagem de ${fromName} para ${toId}`);
-          wsStore.sendMessage({
-            fromId: userId,
-            fromName,
-            toId,
-            message,
-            requestId
-          });
+          wsStore.sendMessage({ fromId: userId, fromName, toId, message, requestId });
           break;
         }
         
@@ -471,15 +424,7 @@ if (isVercel) {
           if (!userId) break;
           const { providerId, rating, review, requestId } = msg;
           const clientName = connectedUsers.get(userId)?.name ?? 'Cliente';
-          console.log(`⭐ Avaliação ${rating}⭐ para prestador ${providerId}`);
-          wsStore.notifyProviderRating({
-            providerId,
-            clientId: userId,
-            clientName,
-            rating,
-            review,
-            requestId
-          });
+          wsStore.notifyProviderRating({ providerId, clientId: userId, clientName, rating, review, requestId });
           break;
         }
         
@@ -490,9 +435,6 @@ if (isVercel) {
           }
           wsSend(ws, 'pong', { timestamp: new Date().toISOString() });
           break;
-          
-        default:
-          console.log(`⚠️ WS: tipo desconhecido: ${msg.type}`);
       }
     });
     
@@ -500,32 +442,26 @@ if (isVercel) {
       if (userId) {
         const u = connectedUsers.get(userId);
         if (u) {
-          console.log(`🔴 WS desconectado: ${u.name} (${userId}) - role: ${u.role}`);
+          console.log(`🔴 Desconectado: ${u.name}`);
           if (u.role === 'provider') {
-            const notified = wsBroadcast('provider_offline',
-              { provider: { id: userId, name: u.name } },
+            wsBroadcast('provider_offline', { provider: { id: userId, name: u.name } },
               (id) => connectedUsers.get(id)?.role === 'client');
-            console.log(`📢 ${notified} clientes notificados sobre offline`);
           }
         }
         connectedUsers.delete(userId);
-        console.log(`📊 Usuários restantes conectados: ${connectedUsers.size}`);
       }
     });
     
     ws.on('error', (e) => console.error('❌ WS erro:', e.message));
   });
   
-  // Heartbeat check a cada 30 segundos
   setInterval(() => {
     const now = new Date();
     const timeout = 30000;
     connectedUsers.forEach((data, id) => {
       if (now - data.lastHeartbeat > timeout) {
-        console.log(`⏰ Heartbeat timeout para usuário ${id}, desconectando...`);
-        const ws = data.ws;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.close();
+        if (data.ws && data.ws.readyState === WebSocket.OPEN) {
+          data.ws.close();
         }
         connectedUsers.delete(id);
       }
