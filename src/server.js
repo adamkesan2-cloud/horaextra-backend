@@ -11,54 +11,84 @@ const fs = require('fs');
 
 const app = express();
 
-// Detectar ambiente Vercel
+// Detectar ambiente
 const isVercel = process.env.VERCEL === '1';
+const isProduction = process.env.NODE_ENV === 'production';
 
 // Uploads - usar /tmp no Vercel
 const uploadsDir = isVercel ? '/tmp/uploads' : path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
-// CORS configurado para produção
+// ============================================
+// CORS CONFIGURADO CORRETAMENTE
+// ============================================
 const allowedOrigins = [
-  'https://horaextra-amber.vercel.app',
-  'https://horaextra.vercel.app',
   'https://horaextra-app.vercel.app',
-  'https://horaextra-app-git-main-adam-kesans-projects.vercel.app',
+  'https://horaextra-app-git-main.vercel.app',
   'http://localhost:3000',
-  'http://localhost:4000',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:4000'
+  'http://localhost:5173',
+  'http://localhost:8080',
+  /\.vercel\.app$/,
 ];
+
 const corsOptions = {
   origin: function(origin, callback) {
-    // Aceita sem origin (mobile, Postman)
+    // Permitir requisições sem origin (como mobile apps)
     if (!origin) return callback(null, true);
-    // Aceita localhost
-    if (origin.includes('localhost') || origin.includes('127.0.0.1')) return callback(null, true);
-    // Aceita qualquer domínio Vercel
-    if (origin.includes('vercel.app')) return callback(null, true);
-    // Aceita Railway
-    if (origin.includes('railway.app')) return callback(null, true);
-    // Log e aceita mesmo assim (para não bloquear)
-    console.log('⚠️ CORS origem desconhecida mas aceite:', origin);
-    return callback(null, true);
+    
+    // Verificar se a origem é permitida
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed instanceof RegExp) {
+        return allowed.test(origin);
+      }
+      return allowed === origin;
+    });
+    
+    if (isAllowed || isProduction === false) {
+      callback(null, true);
+    } else {
+      console.log(`❌ CORS bloqueado: ${origin}`);
+      callback(new Error('CORS blocked'), false);
+    }
   },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
-  credentials: true,
-  optionsSuccessStatus: 204,
+  exposedHeaders: ['Content-Length', 'X-Total-Count'],
+  maxAge: 86400,
 };
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(morgan('dev'));
+
+// Aplicar CORS
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+// Fallback CORS para garantir
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  next();
+});
+
+app.use(helmet({ 
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
+}));
+app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Rotas de diagnóstico
 app.get('/', (req, res) => res.json({ success: true, message: 'API HoraExtra funcionando!' }));
-app.get('/api/health', (req, res) => res.json({ status: 'OK', timestamp: new Date(), environment: process.env.NODE_ENV }));
+app.get('/api/health', (req, res) => res.json({ 
+  status: 'OK', 
+  timestamp: new Date(), 
+  environment: process.env.NODE_ENV,
+  vercel: isVercel
+}));
 
 // Funções auxiliares de rota
 function haversineDistance(lat1, lon1, lat2, lon2) {
@@ -94,7 +124,7 @@ function routeFallback(fromLat, fromLng, toLat, toLng) {
   };
 }
 
-// CORRIGIDO: Rota de rota sem duplicação - /api/route (sem /api extra)
+// Rota de rota - /api/route
 app.get('/api/route', async (req, res) => {
   const { fromLat, fromLng, toLat, toLng } = req.query;
   
@@ -128,7 +158,6 @@ app.get('/api/route', async (req, res) => {
       return res.json(routeFallback(fLat, fLng, tLat, tLng));
     }
     
-    // Decodificar polyline
     const polyline = require('@mapbox/polyline');
     const decodedPoints = polyline.decode(route.geometry);
     const points = decodedPoints.map(p => ({ lat: p[0], lng: p[1] }));
@@ -145,7 +174,7 @@ app.get('/api/route', async (req, res) => {
   }
 });
 
-// Rota alternativa sem /api (para compatibilidade)
+// Rota alternativa
 app.get('/route', async (req, res) => {
   const { fromLat, fromLng, toLat, toLng } = req.query;
   if (!fromLat || !fromLng || !toLat || !toLng) {
@@ -206,22 +235,19 @@ app.use((err, req, res, next) => {
 const { sequelize } = require('./config/database');
 
 if (isVercel) {
-  // Para Vercel, apenas sincronizar e exportar
+  // Para Vercel, apenas exportar (WebSocket não suportado)
+  console.log('📦 Modo Vercel - WebSocket não disponível');
   sequelize.authenticate()
-    .then(() => {
-      console.log('✅ DB conectado (Vercel)');
-      return sequelize.sync({ alter: false });
-    })
-    .then(() => console.log('✅ DB sincronizado (Vercel)'))
+    .then(() => console.log('✅ DB conectado (Vercel)'))
     .catch(err => console.error('❌ Erro DB:', err.message));
   
   module.exports = app;
 } else {
-  // Desenvolvimento local - iniciar servidor com WebSocket
+  // Desenvolvimento local ou Railway - iniciar servidor com WebSocket
   const http = require('http');
   const server = http.createServer(app);
   
-  // WebSocket apenas em desenvolvimento
+  // WebSocket apenas em ambiente não-Vercel
   const WebSocket = require('ws');
   const wss = new WebSocket.Server({ server, path: '/ws' });
   const wsStore = require('./wsStore');
@@ -406,7 +432,6 @@ if (isVercel) {
           const clientName = connectedUsers.get(userId)?.name ?? 'Cliente';
           console.log(`✅ Cliente ${clientName} concluiu serviço ${requestId}`);
           
-          // Buscar providerId do pedido
           try {
             const { ServiceRequest } = require('./models');
             const request = await ServiceRequest.findByPk(requestId);
