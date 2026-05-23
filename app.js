@@ -1,57 +1,46 @@
-﻿// backend/app.js
-require('dotenv').config();
+﻿// app.js — configuração Express partilhada (Vercel + Railway)
+// NÃO arranca servidor aqui. Apenas configura middlewares, rotas e DB.
 require('pg');
 require('pg-hstore');
 
 const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
-const path = require('path');
-const fs = require('fs');
+const cors    = require('cors');
+const helmet  = require('helmet');
+const morgan  = require('morgan');
+const path    = require('path');
+const fs      = require('fs');
 
 const app = express();
 app.set('trust proxy', 1);
 
-// Detectar ambiente
-const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+// ─── Ambiente ─────────────────────────────────────────────────────────────────
+// VERCEL=1  → Vercel serverless
+// else      → Railway ou local (ambos usam listen())
+const isVercel = process.env.VERCEL === '1';
+const isProd   = process.env.NODE_ENV === 'production';
+const isLocal  = !isProd;
 
-// Pasta de uploads (Vercel usa /tmp)
-const uploadsDir = isVercel ? '/tmp/uploads' : path.join(__dirname, 'uploads');
+// ─── Uploads ──────────────────────────────────────────────────────────────────
+const uploadsDir = isVercel
+  ? '/tmp/uploads'
+  : path.join(__dirname, 'uploads');
+
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('📁 Pasta uploads criada:', uploadsDir);
+  console.log('📁 Uploads:', uploadsDir);
 }
 app.use('/uploads', express.static(uploadsDir));
 
-// CORS configurado para produção
-const allowedOrigins = [
-  'https://horaextra-amber.vercel.app',
-  'https://horaextra.vercel.app',
-  'https://horaextra-app.vercel.app',
-  'https://horaextra-app-git-main-adam-kesans-projects.vercel.app',
-  'http://localhost:3000',
-  'http://localhost:4000',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:4000',
-  'http://localhost:5000',
-  'https://horaextra-backend-production.up.railway.app'
-];
-
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 const corsOptions = {
-  origin: function(origin, callback) {
-    // Aceita sem origin (mobile, Postman)
-    if (!origin) return callback(null, true);
-    // Aceita localhost
-    if (origin.includes('localhost') || origin.includes('127.0.0.1')) return callback(null, true);
-    // Aceita qualquer domínio Vercel
-    if (origin.includes('vercel.app')) return callback(null, true);
-    // Aceita Railway
-    if (origin.includes('railway.app')) return callback(null, true);
-    // Log e aceita mesmo assim (para não bloquear)
-    console.log('⚠️ CORS origem desconhecida mas aceite:', origin);
-    return callback(null, true);
+  origin: (origin, cb) => {
+    if (!origin)                          return cb(null, true); // mobile / Postman
+    if (origin.includes('localhost'))     return cb(null, true);
+    if (origin.includes('127.0.0.1'))     return cb(null, true);
+    if (origin.includes('vercel.app'))    return cb(null, true);
+    if (origin.includes('railway.app'))   return cb(null, true);
+    console.warn('⚠️  CORS origem desconhecida (aceite):', origin);
+    return cb(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
@@ -59,19 +48,17 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// Middlewares
-app.use(helmet({ 
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
-  contentSecurityPolicy: false
-}));
-app.use(morgan('combined'));
+// ─── Middlewares ──────────────────────────────────────────────────────────────
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
+app.use(morgan(isLocal ? 'dev' : 'combined'));
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Rate limit apenas em produção
+// Rate limit apenas no Vercel (Railway tem controlo próprio)
 if (isVercel) {
+  const rateLimit = require('express-rate-limit');
   app.use('/api/', rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
@@ -81,27 +68,29 @@ if (isVercel) {
   }));
 }
 
-// Rotas básicas (sem DB)
-app.get('/', (req, res) => res.json({ 
-  success: true, 
-  message: 'API HoraExtra funcionando!', 
-  timestamp: new Date(),
-  environment: process.env.NODE_ENV
-}));
-
-app.get('/api/health', (req, res) => res.json({ 
-  status: 'OK', 
+// ─── Rotas sem DB ─────────────────────────────────────────────────────────────
+app.get('/', (req, res) => res.json({
+  success: true,
+  message: 'API HoraExtra funcionando!',
   timestamp: new Date(),
   environment: process.env.NODE_ENV,
-  database: process.env.DATABASE_URL ? 'configured' : 'not configured'
+  platform: isVercel ? 'vercel' : (isProd ? 'railway' : 'local'),
 }));
 
-// Inicialização do DB (lazy loading)
-let dbInitialized = false;
-let dbError = null;
-let initPromise = null;
+app.get('/api/health', (req, res) => res.json({
+  status: 'OK',
+  timestamp: new Date(),
+  environment: process.env.NODE_ENV,
+  platform: isVercel ? 'vercel' : (isProd ? 'railway' : 'local'),
+  database: process.env.DATABASE_URL || process.env.DB_HOST ? 'configured' : 'not configured',
+}));
 
-function initDB() {
+// ─── DB (lazy, com cache) ─────────────────────────────────────────────────────
+let dbInitialized = false;
+let dbError       = null;
+let initPromise   = null;
+
+async function initDB() {
   if (initPromise) return initPromise;
   initPromise = (async () => {
     try {
@@ -119,54 +108,63 @@ function initDB() {
   return initPromise;
 }
 
-// Diagnóstico
+// ─── Diagnóstico ──────────────────────────────────────────────────────────────
 app.get('/api/diag', async (req, res) => {
   await initDB();
+  const mods = ['pg', 'sequelize', './src/config/database', './src/models', './src/routes'];
   const tests = {};
-  const modules = ['pg', 'sequelize', './src/config/database', './src/models', './src/routes'];
-  for (const mod of modules) {
-    try { 
-      require(mod); 
-      tests[mod] = 'OK'; 
-    } catch (e) { 
-      tests[mod] = 'ERRO: ' + e.message; 
-    }
+  for (const mod of mods) {
+    try { require(mod); tests[mod] = 'OK'; }
+    catch (e) { tests[mod] = 'ERRO: ' + e.message; }
   }
-  res.json({ 
-    ...tests, 
-    dbInitialized, 
-    dbError, 
-    uploadsDir, 
+  res.json({
+    modules: tests,
+    dbInitialized,
+    dbError,
+    uploadsDir,
     uploadsDirExists: fs.existsSync(uploadsDir),
-    isVercel,
-    nodeEnv: process.env.NODE_ENV
+    env: {
+      isVercel,
+      isProd,
+      NODE_ENV:  process.env.NODE_ENV,
+      hasDBUrl:  !!process.env.DATABASE_URL,
+      hasDBHost: !!process.env.DB_HOST,
+    },
   });
 });
 
-// Middleware de DB para rotas da API
+// ─── Middleware DB para rotas /api ────────────────────────────────────────────
 app.use('/api', async (req, res, next) => {
+  // Rotas sem DB (health e diag já responderam acima)
+  if (['/api/health', '/api/diag'].includes(req.path)) return next();
+
   await initDB();
   if (!dbInitialized) {
-    return res.status(503).json({ error: 'DB não conectado', detail: dbError });
+    return res.status(503).json({
+      error: 'Banco de dados não disponível',
+      detail: dbError,
+    });
   }
   next();
 });
 
-// Rotas da API
+// ─── Rotas da aplicação ───────────────────────────────────────────────────────
 const routes = require('./src/routes');
 app.use('/api', routes);
 
-// 404
+// ─── 404 ──────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ error: `Rota não encontrada: ${req.method} ${req.path}` });
 });
 
-// Error handler
+// ─── Error handler ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('❌ Error:', err.message);
   res.status(err.status || 500).json({
-    error: process.env.NODE_ENV === 'development' ? err.message : 'Erro interno do servidor',
+    error: isLocal ? err.message : 'Erro interno do servidor',
   });
 });
 
+// ─── Exports ──────────────────────────────────────────────────────────────────
 module.exports = app;
+module.exports.initDB = initDB; // usado por src/server.js para pré-aquecer o DB
