@@ -1,4 +1,4 @@
-// src/server.js — entry point Railway + desenvolvimento local
+﻿// src/server.js — entry point Railway + desenvolvimento local
 // Vercel usa app.js directamente (vercel.json). Este ficheiro NÃO é chamado pelo Vercel.
 
 if (process.env.NODE_ENV !== 'production') {
