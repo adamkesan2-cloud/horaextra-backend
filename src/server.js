@@ -30,8 +30,18 @@ wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
+  console.log(`🔌 Nova conexão WS: ${req.url}`);
+
   const url   = new URL(req.url, 'http://localhost');
   const token = url.searchParams.get('token');
+
+  console.log(`🔑 Token recebido: ${token ? token.substring(0, 30) + '...' : 'NENHUM'}`);
+
+  if (!token) {
+    console.log('❌ WS: sem token — fechando conexão');
+    ws.close(1008, 'Token obrigatório');
+    return;
+  }
 
   let userId, userName, userRole;
   try {
@@ -39,7 +49,9 @@ wss.on('connection', (ws, req) => {
     userId   = String(decoded.id);
     userName = decoded.name;
     userRole = decoded.role;
+    console.log(`✅ WS: token válido para ${userName} (${userRole}) [${userId}]`);
   } catch (e) {
+    console.error(`❌ WS: token inválido: ${e.message}`);
     ws.close(1008, 'Token inválido');
     return;
   }
@@ -63,36 +75,32 @@ wss.on('connection', (ws, req) => {
       const msg  = JSON.parse(raw);
       const user = wsStore.connectedUsers.get(userId);
 
-      // Flutter envia register logo após conectar
+      console.log(`📩 WS msg de ${userName}: ${msg.type}`);
+
       if (msg.type === 'register') {
-        // Atualizar dados do utilizador se enviados
         if (user) {
-          if (msg.lat)      user.lat      = msg.lat;
-          if (msg.lng)      user.lng      = msg.lng;
+          if (msg.lat)                    user.lat      = msg.lat;
+          if (msg.lng)                    user.lng      = msg.lng;
           if (msg.isOnline !== undefined) user.isOnline = msg.isOnline;
         }
         ws.send(JSON.stringify({ type: 'registered', userId }));
         console.log(`✅ WS: registo confirmado para ${userName}`);
       }
 
-      // Flutter envia ping periódico
       if (msg.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
       }
 
-      // Heartbeat alternativo
       if (msg.type === 'heartbeat') {
         if (user) user.lastHeartbeat = new Date();
         ws.send(JSON.stringify({ type: 'heartbeat_ack' }));
       }
 
-      // Atualização de localização
       if (msg.type === 'location_update' && user) {
         user.lat = msg.lat;
         user.lng = msg.lng;
       }
 
-      // Estado online/offline
       if (msg.type === 'set_online_status' && user) {
         user.isOnline = msg.isOnline;
         console.log(`📡 ${userName} → isOnline: ${msg.isOnline}`);
@@ -103,9 +111,9 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
     wsStore.connectedUsers.delete(userId);
-    console.log(`🔌 WS desconectado: ${userName}`);
+    console.log(`🔌 WS desconectado: ${userName} (código: ${code}, motivo: ${reason})`);
   });
 
   ws.on('error', (err) => {
