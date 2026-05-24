@@ -3,3 +3,9 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "node src/server.js"
+
+[[services]]
+  protocol = "tcp"
+  
+[networking]
+  allowWebsockets = true
