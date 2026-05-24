@@ -28,64 +28,78 @@ wss.on('close', () => clearInterval(pingInterval));
 
 wss.on('connection', (ws, req) => {
   ws.isAlive = true;
+  ws.userId  = null;
   ws.on('pong', () => { ws.isAlive = true; });
 
-  console.log(`🔌 Nova conexão WS: ${req.url}`);
+  console.log(`🔌 Nova conexão WS recebida`);
 
-  const url   = new URL(req.url, 'http://localhost');
-  const token = url.searchParams.get('token');
-
-  console.log(`🔑 Token recebido: ${token ? token.substring(0, 30) + '...' : 'NENHUM'}`);
-
-  if (!token) {
-    console.log('❌ WS: sem token — fechando conexão');
-    ws.close(1008, 'Token obrigatório');
-    return;
-  }
-
-  let userId, userName, userRole;
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    userId   = String(decoded.id);
-    userName = decoded.name;
-    userRole = decoded.role;
-    console.log(`✅ WS: token válido para ${userName} (${userRole}) [${userId}]`);
-  } catch (e) {
-    console.error(`❌ WS: token inválido: ${e.message}`);
-    ws.close(1008, 'Token inválido');
-    return;
-  }
-
-  wsStore.connectedUsers.set(userId, {
-    ws, name: userName, role: userRole,
-    isOnline: true, lastHeartbeat: new Date(),
-  });
-  console.log(`🔌 WS conectado: ${userName} (${userRole})`);
-
-  // Entregar notificações pendentes
-  const pending = wsStore.getPendingNotifications(userId);
-  if (pending.length > 0) {
-    pending.forEach(({ type, payload }) => wsStore.sendToUser(userId, type, payload));
-    wsStore.clearPendingNotifications(userId);
-    console.log(`📬 ${pending.length} notificações entregues a ${userName}`);
-  }
+  // Timeout de autenticação — 10 segundos
+  const authTimeout = setTimeout(() => {
+    if (!ws.userId) {
+      console.log('❌ WS: timeout de autenticação — fechando');
+      ws.close(1008, 'Timeout de autenticação');
+    }
+  }, 10000);
 
   ws.on('message', (raw) => {
     try {
-      const msg  = JSON.parse(raw);
-      const user = wsStore.connectedUsers.get(userId);
+      const msg = JSON.parse(raw);
 
-      console.log(`📩 WS msg de ${userName}: ${msg.type}`);
-
-      if (msg.type === 'register') {
-        if (user) {
-          if (msg.lat)                    user.lat      = msg.lat;
-          if (msg.lng)                    user.lng      = msg.lng;
-          if (msg.isOnline !== undefined) user.isOnline = msg.isOnline;
+      // ── Autenticação (primeira mensagem) ──────────────────────────────
+      if (!ws.userId) {
+        if (msg.type !== 'auth' && msg.type !== 'register') {
+          console.log(`❌ WS: mensagem sem autenticação: ${msg.type}`);
+          ws.close(1008, 'Autenticação necessária');
+          return;
         }
+
+        const token = msg.token;
+        if (!token) {
+          console.log('❌ WS: sem token');
+          ws.close(1008, 'Token obrigatório');
+          return;
+        }
+
+        let userId, userName, userRole;
+        try {
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          userId   = String(decoded.id);
+          userName = decoded.name;
+          userRole = decoded.role;
+        } catch (e) {
+          console.error(`❌ WS: token inválido: ${e.message}`);
+          ws.close(1008, 'Token inválido');
+          return;
+        }
+
+        clearTimeout(authTimeout);
+        ws.userId = userId;
+
+        wsStore.connectedUsers.set(userId, {
+          ws,
+          name:          userName,
+          role:          userRole,
+          isOnline:      msg.isOnline !== false,
+          lastHeartbeat: new Date(),
+          lat:           msg.lat,
+          lng:           msg.lng,
+        });
+
+        console.log(`✅ WS: autenticado ${userName} (${userRole}) [${userId}]`);
         ws.send(JSON.stringify({ type: 'registered', userId }));
-        console.log(`✅ WS: registo confirmado para ${userName}`);
+
+        // Entregar notificações pendentes
+        const pending = wsStore.getPendingNotifications(userId);
+        if (pending.length > 0) {
+          pending.forEach(({ type, payload }) => wsStore.sendToUser(userId, type, payload));
+          wsStore.clearPendingNotifications(userId);
+          console.log(`📬 ${pending.length} notificações entregues a ${userName}`);
+        }
+        return;
       }
+
+      // ── Mensagens normais (após autenticação) ─────────────────────────
+      const user = wsStore.connectedUsers.get(ws.userId);
 
       if (msg.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
@@ -103,7 +117,7 @@ wss.on('connection', (ws, req) => {
 
       if (msg.type === 'set_online_status' && user) {
         user.isOnline = msg.isOnline;
-        console.log(`📡 ${userName} → isOnline: ${msg.isOnline}`);
+        console.log(`📡 ${user.name} → isOnline: ${msg.isOnline}`);
       }
 
     } catch (e) {
@@ -112,12 +126,16 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', (code, reason) => {
-    wsStore.connectedUsers.delete(userId);
-    console.log(`🔌 WS desconectado: ${userName} (código: ${code}, motivo: ${reason})`);
+    clearTimeout(authTimeout);
+    if (ws.userId) {
+      const user = wsStore.connectedUsers.get(ws.userId);
+      wsStore.connectedUsers.delete(ws.userId);
+      console.log(`🔌 WS desconectado: ${user?.name ?? ws.userId} (código: ${code})`);
+    }
   });
 
   ws.on('error', (err) => {
-    console.error(`❌ WS erro (${userName}):`, err.message);
+    console.error(`❌ WS erro:`, err.message);
   });
 });
 
