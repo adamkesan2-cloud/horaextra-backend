@@ -160,9 +160,10 @@ exports.updateProviderProfile = async (req, res) => {
     const profile = await ProviderProfile.findOne({ where: { user_id: req.user.id } });
     if (!profile) return res.status(404).json({ error: 'Perfil não encontrado' });
 
-    const allowedFields = [
+        const allowedFields = [
       'description', 'specialties', 'experience_years',
-      'working_hours', 'service_radius', 'location', 'is_available'
+      'working_hours', 'service_radius', 'location', 'is_available',
+      'category_ids'
     ];
     const updates = {};
     allowedFields.forEach(field => {

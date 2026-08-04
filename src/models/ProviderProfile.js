@@ -19,7 +19,13 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true
     },
-    specialties: {
+       specialties: {
+      type: DataTypes.JSON,
+      defaultValue: []
+    },
+    // Categorias em que este prestador aceita pedidos — usado pelo fluxo
+    // "categoria + quantidade" no cliente para saber quem convidar.
+    category_ids: {
       type: DataTypes.JSON,
       defaultValue: []
     },

@@ -1,16 +1,15 @@
-// backend/src/config/database.js
-const pg = require('pg');
+﻿// backend/src/config/database.js
 const { Sequelize } = require('sequelize');
 
 const sequelize = new Sequelize(
-  process.env.DB_NAME || 'postgres',
-  process.env.DB_USER || 'postgres.enebxldzesysuqkffknb',
-  process.env.DB_PASSWORD || 'YsqPKf0YHZzRNNJR',
+  process.env.DB_NAME,
+  process.env.DB_USER,
+  process.env.DB_PASSWORD,
   {
-    host: process.env.DB_HOST || 'aws-1-us-west-1.pooler.supabase.com',
-    port: parseInt(process.env.DB_PORT) || 5432,
+    host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT) || 6543,
     dialect: 'postgres',
-    logging: console.log,
+    logging: false,
     pool: {
       max: 5,
       min: 0,

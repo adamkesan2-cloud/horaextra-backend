@@ -47,28 +47,11 @@ router.get('/', async (req, res) => {
     return res.status(400).json({ error: 'Parâmetros obrigatórios: fromLat, fromLng, toLat, toLng' });
   }
 
-  try {
-    // OSRM público — driving profile — formato: lng,lat (atenção à ordem)
-    const url = `https://router.project-osrm.org/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=polyline`;
+  const fLat = parseFloat(fromLat), fLng = parseFloat(fromLng);
+  const tLat = parseFloat(toLat), tLng = parseFloat(toLng);
 
-    const response = await axios.get(url, { timeout: 8000 });
-    const route = response.data.routes?.[0];
-
-    if (!route) {
-      return res.status(404).json({ error: 'Rota não encontrada' });
-    }
-
-    const distanceKm = route.distance / 1000;
-    const durationMin = route.duration / 60;
-    const points = decodePolyline(route.geometry);
-
-    return res.json({ distanceKm, durationMin, points });
-  } catch (err) {
-    console.error('Erro OSRM:', err.message);
-
-    // Fallback: linha recta se OSRM falhar
-    const fLat = parseFloat(fromLat), fLng = parseFloat(fromLng);
-    const tLat = parseFloat(toLat), tLng = parseFloat(toLng);
+  // ── Fallback: linha reta entre os dois pontos ──────────────────────────
+  function straightLineFallback() {
     const R = 6371;
     const dLat = (tLat - fLat) * Math.PI / 180;
     const dLon = (tLng - fLng) * Math.PI / 180;
@@ -81,7 +64,27 @@ router.get('/', async (req, res) => {
       lng: fLng + (tLng - fLng) * i / 10,
     }));
 
-    return res.json({ distanceKm, durationMin: distanceKm * 3, points, fallback: true });
+    return { distanceKm, durationMin: distanceKm * 3, points, fallback: true };
+  }
+
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=polyline`;
+    const response = await axios.get(url, { timeout: 8000 });
+    const route = response.data.routes?.[0];
+
+    if (!route) {
+      console.warn(`⚠️ OSRM sem rota para ${fromLat},${fromLng} → ${toLat},${toLng} — a usar fallback`);
+      return res.json(straightLineFallback());
+    }
+
+    const distanceKm = route.distance / 1000;
+    const durationMin = route.duration / 60;
+    const points = decodePolyline(route.geometry);
+
+    return res.json({ distanceKm, durationMin, points });
+  } catch (err) {
+    console.error('Erro OSRM:', err.message);
+    return res.json(straightLineFallback());
   }
 });
 

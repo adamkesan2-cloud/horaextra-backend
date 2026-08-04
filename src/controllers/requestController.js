@@ -21,15 +21,17 @@ function safeLocation(raw) {
 // ─────────────────────────────────────────────────────────────────────────────
 exports.createRequest = async (req, res) => {
   try {
-    const {
+     const {
       service_id,
       client_name,
       selected_providers = [],
       location,
       budget,
       scheduled_date,
-      observations,
       payment_method,
+      request_mode,          // 'broadcast' | 'category' | 'manual'
+      category_id,
+      requested_provider_count,
     } = req.body;
 
     const client = await User.findByPk(req.user.id);
@@ -39,27 +41,66 @@ exports.createRequest = async (req, res) => {
 
     let serviceName = 'Serviço';
     let serviceData = null;
+    let servicePrice = 0;
     if (service_id) {
       serviceData = await Service.findByPk(service_id);
-      if (serviceData) serviceName = serviceData.name;
+      if (serviceData) {
+        serviceName = serviceData.name;
+        servicePrice = serviceData.price || 0;
+      }
     }
 
     const loc = safeLocation(location);
+    const quantity = req.body.quantity || 1;
+    const totalBudget = (budget || servicePrice) * quantity;
+
+    // Resolve os prestadores convidados consoante o modo:
+    // 'category'  → todos os aprovados/disponíveis com serviços na categoria
+    // 'broadcast' → IDs já filtrados no app (prestadores online).
+    // 'manual'    → seleção manual feita pelo cliente.
+    const mode = request_mode || (category_id ? 'category' : 'manual');
+    let invitedProviders = selected_providers;
+    const wanted = mode === 'category' ? Number(requested_provider_count) || 1 : 1;
+    
+    if (mode === 'category') {
+      if (!category_id || !requested_provider_count) {
+        return res.status(400).json({ error: 'category_id e requested_provider_count são obrigatórios' });
+      }
+      const providers = await ProviderProfile.findAll({
+        where: {
+          is_approved: true,
+          is_available: true,
+          category_ids: { [Op.contains]: [category_id] },
+        },
+      });
+      invitedProviders = providers.map((p) => p.user_id);
+      if (invitedProviders.length === 0) {
+        return res.status(400).json({ error: 'Nenhum prestador disponível nesta categoria' });
+      }
+    }
 
     const serviceRequest = await ServiceRequest.create({
       id: uuidv4(),
       request_number: requestNumber,
       service_id: service_id || null,
       client_id: client.id,
-      status: selected_providers.length > 0 ? 'providers_selected' : 'pending',
+      status: invitedProviders.length > 0 ? 'providers_selected' : 'pending',
       scheduled_date: scheduled_date ? new Date(scheduled_date) : null,
       location: loc,
-      observations: observations || '',
-      budget: budget || 0,
+      budget: totalBudget,
       payment_method: payment_method || 'cash',
       payment_status: 'pending',
-      selected_providers,
+      request_mode: mode,
+      category_id: category_id || null,
+      requested_provider_count: wanted,
+      accepted_providers: [],
+      selected_providers: invitedProviders,
       quotes: [],
+      quantity: quantity || 1,
+      service_price: servicePrice,
+      price_per_provider: 0,
+      provider_count: 0,
+      is_price_divided: false,
       metadata: {
         client_name: client.name,
         service_name: serviceName,
@@ -72,13 +113,14 @@ exports.createRequest = async (req, res) => {
       clientName: client.name,
       serviceName,
       location: loc,
-      selectedProviderIds: selected_providers,
-      budget: budget || 0,
-      observations: observations || '',
+      selectedProviderIds: invitedProviders,
+      budget: totalBudget,
       isUrgent: req.body.isUrgent || false,
+      quantity: quantity,
+      wantedProviders: wanted,
     });
 
-    console.log(`✅ Pedido ${requestNumber} criado | ${selected_providers.length} prestador(es) | WS notificados: ${notified}`);
+    console.log(`✅ Pedido ${requestNumber} criado | modo=${mode} | ${invitedProviders.length} convidado(s) | quer ${wanted} | WS notificados: ${notified}`);
 
     return res.status(201).json({
       success: true,
@@ -125,6 +167,11 @@ exports.getClientRequests = async (req, res) => {
       price: req.budget,
       created_at: req.created_at,
       updated_at: req.updated_at,
+      quantity: req.quantity || 1,
+      provider_count: req.provider_count || 0,
+      price_per_provider: req.price_per_provider || 0,
+      is_price_divided: req.is_price_divided || false,
+      accepted_providers: req.accepted_providers || [],
     }));
     
     res.json({ success: true, data: formatted });
@@ -166,6 +213,11 @@ exports.getClientActiveServices = async (req, res) => {
       price: req.budget,
       created_at: req.created_at,
       updated_at: req.updated_at,
+      quantity: req.quantity || 1,
+      provider_count: req.provider_count || 0,
+      price_per_provider: req.price_per_provider || 0,
+      is_price_divided: req.is_price_divided || false,
+      accepted_providers: req.accepted_providers || [],
     }));
     
     res.json({ success: true, data: formatted });
@@ -216,8 +268,6 @@ exports.getClientHistory = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PEDIDOS DO PRESTADOR
 // ─────────────────────────────────────────────────────────────────────────────
-// backend/src/controllers/requestController.js
-
 exports.getProviderPendingRequests = async (req, res) => {
   try {
     const requests = await ServiceRequest.findAll({
@@ -230,7 +280,7 @@ exports.getProviderPendingRequests = async (req, res) => {
           model: Service, 
           as: 'service', 
           attributes: ['id', 'name', 'price', 'description'],
-          required: false  // LEFT JOIN
+          required: false
         },
         { 
           model: User, 
@@ -243,31 +293,23 @@ exports.getProviderPendingRequests = async (req, res) => {
     });
     
     const formatted = requests.map(req => {
-      // 🔧 CORREÇÃO: Garantir service_name NUNCA vazio
       let serviceName = 'Serviço';
       
-      // Tentar obter do service associado
       if (req.service && req.service.name) {
         serviceName = req.service.name;
-      } 
-      // Fallback para metadata
-      else if (req.metadata && req.metadata.service_name) {
+      } else if (req.metadata && req.metadata.service_name) {
         serviceName = req.metadata.service_name;
-      }
-      // Fallback para observações (último recurso)
-      else if (req.observations && req.observations.length > 0) {
+      } else if (req.observations && req.observations.length > 0) {
         serviceName = req.observations.length > 30 
           ? req.observations.substring(0, 30) + '...' 
           : req.observations;
       }
       
-      console.log(`📦 Pedido ${req.id}: service_name="${serviceName}" (via ${req.service ? 'service' : (req.metadata ? 'metadata' : 'fallback')})`);
-      
       return {
         id: req.id,
         request_number: req.request_number,
         service_id: req.service_id,
-        service_name: serviceName,  // ✅ NUNCA vazio
+        service_name: serviceName,
         client_id: req.client_id,
         client_name: req.client?.name || req.metadata?.client_name || 'Cliente',
         client_phone: req.client?.phone,
@@ -283,6 +325,13 @@ exports.getProviderPendingRequests = async (req, res) => {
         created_at: req.created_at,
         updated_at: req.updated_at,
         is_urgent: req.metadata?.is_urgent || false,
+        quantity: req.quantity || 1,
+        requested_provider_count: req.requested_provider_count || 1,
+        accepted_providers: req.accepted_providers || [],
+        price_per_provider: req.price_per_provider || 0,
+        is_price_divided: req.is_price_divided || false,
+        provider_count: req.provider_count || 0,
+        service_price: req.service_price || 0,
       };
     });
     
@@ -327,6 +376,11 @@ exports.getProviderActiveServices = async (req, res) => {
       price: req.budget,
       created_at: req.created_at,
       updated_at: req.updated_at,
+      quantity: req.quantity || 1,
+      provider_count: req.provider_count || 0,
+      price_per_provider: req.price_per_provider || 0,
+      is_price_divided: req.is_price_divided || false,
+      accepted_providers: req.accepted_providers || [],
     }));
     
     res.json({ success: true, data: formatted });
@@ -408,6 +462,11 @@ exports.getRequestById = async (req, res) => {
       final_price: request.final_price,
       created_at: request.created_at,
       updated_at: request.updated_at,
+      quantity: request.quantity || 1,
+      provider_count: request.provider_count || 0,
+      price_per_provider: request.price_per_provider || 0,
+      is_price_divided: request.is_price_divided || false,
+      accepted_providers: request.accepted_providers || [],
     };
     
     res.json({ success: true, data: formatted });
@@ -452,7 +511,7 @@ exports.acceptRequest = async (req, res) => {
   try {
     const request = await ServiceRequest.findByPk(req.params.id, {
       include: [
-        { model: Service, as: 'service', attributes: ['id', 'name'] },
+        { model: Service, as: 'service', attributes: ['id', 'name', 'price'] },
         { model: User, as: 'client', attributes: ['id', 'name'] }
       ]
     });
@@ -463,49 +522,114 @@ exports.acceptRequest = async (req, res) => {
       return res.status(403).json({ error: 'Apenas prestadores podem aceitar pedidos' });
     }
 
-    // Impedir aceitação dupla
-    if (request.status === 'accepted') {
-      return res.status(409).json({ error: 'Pedido já foi aceite por outro prestador' });
+    // Pedido já fechado (quota atingida, cancelado, concluído)
+    if (['completed', 'cancelled'].includes(request.status)) {
+      return res.status(409).json({ error: 'Pedido já não está disponível' });
     }
 
-    // Verificar se o prestador está na lista de selecionados
-    if (!request.selected_providers.includes(req.user.id)) {
+    if (!request.selected_providers || !request.selected_providers.includes(req.user.id)) {
       return res.status(403).json({ error: 'Você não foi selecionado para este pedido' });
     }
 
+    const alreadyAccepted = (request.accepted_providers || []).includes(req.user.id);
+    if (alreadyAccepted) {
+      return res.json({ success: true, alreadyAccepted: true });
+    }
+
+    const wanted = request.requested_provider_count || 1;
+    const acceptedProviders = [...(request.accepted_providers || []), req.user.id];
+    const acceptedCount = acceptedProviders.length;
+    const isFull = acceptedCount >= wanted;
+
+    // Calcular valor dividido
+    const totalBudget = request.budget || 0;
+    const pricePerProvider = acceptedCount > 0 ? totalBudget / acceptedCount : 0;
+    const servicePrice = request.service_price || 0;
+
     await request.update({
-      status: 'accepted',
-      provider_id: req.user.id,
-      accepted_at: new Date(),
+      status: isFull ? 'accepted' : request.status,
+      provider_id: isFull ? req.user.id : request.provider_id,
+      accepted_providers: acceptedProviders,
+      price_per_provider: pricePerProvider,
+      provider_count: acceptedCount,
+      is_price_divided: acceptedCount > 1,
+      accepted_at: isFull ? new Date() : request.accepted_at,
     });
 
-    // Buscar prestador com localização e nome
     const provider = await User.findByPk(req.user.id, {
-      attributes: ['id', 'name', 'latitude', 'longitude']
+      attributes: ['id', 'name', 'latitude', 'longitude', 'photo_url']
     });
     
     const serviceName = request.service?.name || request.metadata?.service_name || 'serviço';
 
-    // Notificar cliente via WS
+    // Buscar detalhes de todos os provedores que aceitaram
+    const acceptedProviderDetails = await Promise.all(
+      acceptedProviders.map(async (pid) => {
+        const p = await User.findByPk(pid, {
+          attributes: ['id', 'name', 'latitude', 'longitude', 'photo_url']
+        });
+        return p ? {
+          id: p.id,
+          name: p.name,
+          latitude: p.latitude ? parseFloat(p.latitude) : -25.9692,
+          longitude: p.longitude ? parseFloat(p.longitude) : 32.5732,
+          photo_url: p.photo_url
+        } : null;
+      })
+    );
+
+    const validProviders = acceptedProviderDetails.filter(p => p !== null);
+
+    // Notificar cliente com todos os provedores que aceitaram
     wsStore.notifyRequestResponse({
       requestId: request.id,
       providerId: req.user.id,
       providerName: provider?.name ?? 'Prestador',
-      accepted: true,
       providerLat: provider?.latitude ? parseFloat(provider.latitude) : -25.9692,
       providerLng: provider?.longitude ? parseFloat(provider.longitude) : 32.5732,
-      message: `${provider?.name ?? 'Prestador'} aceitou o seu pedido de ${serviceName}!`,
+      providerPhoto: provider?.photo_url,
+      accepted: true,
+      isFull,
+      acceptedCount,
+      wanted,
+      pricePerProvider,
+      totalBudget,
+      isPriceDivided: acceptedCount > 1,
+      acceptedProviders: validProviders,
+      message: acceptedCount > 1 
+        ? `${provider?.name ?? 'Prestador'} aceitou o seu pedido de ${serviceName}! (${acceptedCount}/${wanted} prestadores)`
+        : `${provider?.name ?? 'Prestador'} aceitou o seu pedido de ${serviceName}!`,
     });
 
-    console.log(`✅ Pedido ${request.id} aceite por ${provider?.name}`);
+    // Se já atingiu o número desejado, notificar que a seleção foi finalizada
+    if (isFull) {
+      wsStore.notifySelectionFinalized({
+        requestId: request.id,
+        acceptedProviders: validProviders,
+        pricePerProvider,
+        totalBudget,
+        providerCount: acceptedCount,
+        clientId: request.client_id,
+      });
+    }
+
+    console.log(`✅ Pedido ${request.id} aceite por ${provider?.name} (${acceptedCount}/${wanted}) - Valor dividido: ${pricePerProvider} MT por provedor`);
+    
     return res.json({ 
       success: true, 
       message: 'Pedido aceite com sucesso', 
       data: {
         id: request.id,
-        status: 'accepted',
+        status: isFull ? 'accepted' : request.status,
+        isFull,
+        acceptedCount,
+        wanted,
+        pricePerProvider,
+        totalBudget,
+        isPriceDivided: acceptedCount > 1,
         provider_id: req.user.id,
         provider_name: provider?.name,
+        acceptedProviders: validProviders,
       }
     });
   } catch (error) {
@@ -542,7 +666,6 @@ exports.rejectRequest = async (req, res) => {
 
     const serviceName = request.service?.name || request.metadata?.service_name || 'serviço';
 
-    // Notificar cliente via WS
     wsStore.notifyRequestResponse({
       requestId: request.id,
       providerId: req.user.id,
@@ -588,11 +711,11 @@ exports.startService = async (req, res) => {
       start_time: new Date(),
     });
 
-    // Notificar cliente que serviço começou
     wsStore.notifyServiceStarted({
       requestId: request.id,
       providerId: req.user.id,
       clientId: request.client_id,
+      providerName: req.user.name,
     });
 
     console.log(`🚀 Serviço ${request.id} iniciado pelo prestador`);
@@ -606,8 +729,6 @@ exports.startService = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // ACÇÕES DO CLIENTE
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ✅ CLIENTE CONCLUI SERVIÇO
 exports.completeService = async (req, res) => {
   try {
     const request = await ServiceRequest.findByPk(req.params.id, {
@@ -624,7 +745,6 @@ exports.completeService = async (req, res) => {
       return res.status(403).json({ error: 'Apenas o cliente pode concluir o serviço' });
     }
 
-    // Permite concluir apenas se estiver 'accepted' ou 'in_progress'
     if (!['accepted', 'in_progress'].includes(request.status)) {
       return res.status(400).json({ error: `Status atual: ${request.status} - não pode concluir` });
     }
@@ -660,7 +780,6 @@ exports.completeService = async (req, res) => {
   }
 };
 
-// ✅ CLIENTE CANCELA PEDIDO
 exports.cancelRequest = async (req, res) => {
   try {
     const request = await ServiceRequest.findByPk(req.params.id);
@@ -679,7 +798,6 @@ exports.cancelRequest = async (req, res) => {
       cancelled_at: new Date(),
     });
 
-    // Notificar prestador se já estiver atribuído
     if (request.provider_id) {
       const provider = await User.findByPk(request.provider_id, {
         attributes: ['id', 'name']

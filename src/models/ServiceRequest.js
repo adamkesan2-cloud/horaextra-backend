@@ -1,79 +1,155 @@
 // backend/src/models/ServiceRequest.js
+'use strict';
+const { Model } = require('sequelize');
+
 module.exports = (sequelize, DataTypes) => {
-  const ServiceRequest = sequelize.define('ServiceRequest', {
+  class ServiceRequest extends Model {
+    static associate(models) {
+      ServiceRequest.belongsTo(models.User, { as: 'client', foreignKey: 'client_id' });
+      ServiceRequest.belongsTo(models.User, { as: 'provider', foreignKey: 'provider_id' });
+      ServiceRequest.belongsTo(models.Service, { as: 'service', foreignKey: 'service_id' });
+    }
+  }
+
+  ServiceRequest.init({
     id: {
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
-      primaryKey: true
+      primaryKey: true,
     },
     request_number: {
-      type: DataTypes.STRING(20),
-      unique: true
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true,
     },
     service_id: {
       type: DataTypes.UUID,
-      allowNull: false
+      allowNull: true,
     },
     client_id: {
       type: DataTypes.UUID,
-      allowNull: false
+      allowNull: false,
     },
     provider_id: {
       type: DataTypes.UUID,
-      allowNull: true
+      allowNull: true,
     },
     status: {
-      type: DataTypes.ENUM('pending', 'providers_selected', 'quoted', 'accepted', 'in_progress', 'completed', 'cancelled', 'disputed'),
-      defaultValue: 'pending'
+      type: DataTypes.ENUM(
+        'pending',
+        'providers_selected',
+        'quoted',
+        'accepted',
+        'in_progress',
+        'completed',
+        'cancelled'
+      ),
+      defaultValue: 'pending',
     },
-    scheduled_date: DataTypes.DATE,
-    start_time: DataTypes.DATE,
-    end_time: DataTypes.DATE,
+    scheduled_date: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
     location: {
-      type: DataTypes.JSONB,
-      allowNull: false,
-      defaultValue: {
-        lat: -25.9692,
-        lng: 32.5732,
-        address: 'Maputo, Moçambique'
-      }
+      type: DataTypes.JSON,
+      allowNull: true,
     },
-    observations: DataTypes.TEXT,
-    budget: DataTypes.DECIMAL(10, 2),
-    final_price: DataTypes.DECIMAL(10, 2),
-    payment_method: DataTypes.ENUM('cash', 'card', 'mpesa', 'bank_transfer'),
+    observations: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    budget: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    final_price: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    payment_method: {
+      type: DataTypes.ENUM('cash', 'card', 'mobile'),
+      defaultValue: 'cash',
+    },
     payment_status: {
-      type: DataTypes.ENUM('pending', 'paid', 'refunded', 'failed'),
-      defaultValue: 'pending'
+      type: DataTypes.ENUM('pending', 'paid', 'failed'),
+      defaultValue: 'pending',
+    },
+    request_mode: {
+      type: DataTypes.ENUM('broadcast', 'category', 'manual'),
+      defaultValue: 'manual',
+    },
+    category_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    requested_provider_count: {
+      type: DataTypes.INTEGER,
+      defaultValue: 1,
+    },
+    accepted_providers: {
+      type: DataTypes.JSON,
+      defaultValue: [],
     },
     selected_providers: {
-      type: DataTypes.JSONB,
-      defaultValue: []
+      type: DataTypes.JSON,
+      defaultValue: [],
     },
     quotes: {
-      type: DataTypes.JSONB,
-      defaultValue: []
+      type: DataTypes.JSON,
+      defaultValue: [],
     },
     metadata: {
-      type: DataTypes.JSONB,
-      defaultValue: {}
-    }
+      type: DataTypes.JSON,
+      defaultValue: {},
+    },
+    // NOVOS CAMPOS PARA DIVISÃO DE VALOR
+    quantity: {
+      type: DataTypes.INTEGER,
+      defaultValue: 1,
+    },
+    service_price: {
+      type: DataTypes.DECIMAL(10, 2),
+      defaultValue: 0,
+    },
+    price_per_provider: {
+      type: DataTypes.DECIMAL(10, 2),
+      defaultValue: 0,
+    },
+    provider_count: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    is_price_divided: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
+    accepted_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    start_time: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    end_time: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    completed_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    cancelled_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
   }, {
+    sequelize,
+    modelName: 'ServiceRequest',
     tableName: 'service_requests',
     timestamps: true,
-    underscored: true,
-    hooks: {
-      beforeCreate: async (request) => {
-        if (!request.request_number) {
-          const date = new Date();
-          const year = date.getFullYear().toString().slice(-2);
-          const month = (date.getMonth() + 1).toString().padStart(2, '0');
-          const day = date.getDate().toString().padStart(2, '0');
-          const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-          request.request_number = `REQ${year}${month}${day}${random}`;
-        }
-      }
-    }
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
   });
 
   return ServiceRequest;
